@@ -28,7 +28,7 @@ if( !class_exists('ReOrderPostWithinCategory') ) {
 	/**
 	 * Constructor
 	 */
-		function __construct() {
+		function ReOrderPostWithinCategory() {
 				load_plugin_textdomain('deefusereorder', false, basename(dirname(__FILE__)) . '/languages');
 
 				// hook for activation
@@ -51,6 +51,7 @@ if( !class_exists('ReOrderPostWithinCategory') ) {
 
 				// Ajout des pages de classement des post pour les post et custom post type concernÃ©s
 				add_action('admin_menu', array(&$this, 'add_order_pages'));
+				//add_action('admin_menu', array(&$this, 'add_generic_order_pages'));
 
 				add_action('wp_ajax_cat_ordered_changed', array(&$this, 'cat_orderedChangeTraiment'));
 				add_action('wp_ajax_user_ordering', array(&$this, 'user_orderingTraiment'));
@@ -419,6 +420,16 @@ if( !class_exists('ReOrderPostWithinCategory') ) {
 	}
 
 	/**
+	 * Show admin page for generic sorting posts
+	 * (as per settings options of plugin);
+	 */
+	public function add_generic_order_pages()
+	{
+		$the_page = add_submenu_page( 'edit.php', 'Re-order', 'Reorder', 'manage_categories', 're-orderPost-generic', array(&$this,'printGenericOrderPage'));
+		add_action('admin_head-'. $the_page, array(&$this,'myplugin_admin_header'));
+	}
+
+	/**
 	 * Show admin pages for sorting posts
 	 * (as per settings options of plugin);
 	 */
@@ -536,6 +547,192 @@ if( !class_exists('ReOrderPostWithinCategory') ) {
 	    }
 	}
 
+	public function printGenericOrderPage(){
+		  // On rÃ©cupÃ¨re le VPT sur lequel on travaille
+	    //$page_name = $_GET['page'];
+		//$cpt_name = substr($page_name, 13, strlen($page_name));
+
+		//if( $cpt_name !== 'generic' )
+		//	return;
+
+	    //$post_type = get_post_types(array('name' => $cpt_name), 'objects');
+	    //$post_type_detail  = $post_type[$cpt_name];
+	    //unset($post_type, $page_name, $cpt_name);
+
+	    // On charge les prÃ©fÃ©rences
+	    $settingsOptions = $this->getAdminOptions();
+
+	    // Si le formulaire a Ã©tÃ© soumis
+	    if ( !empty($_POST) && check_admin_referer('loadPostInCat', 'nounceLoadPostCat') && isset($_POST['nounceLoadPostCat']) && wp_verify_nonce($_POST['nounceLoadPostCat'],'loadPostInCat') ){
+				if (isset($_POST['cat_to_retrive']) && !empty($_POST['cat_to_retrive']) && $_POST['cat_to_retrive'] != null) {
+						$cat_to_retrieve_post = $_POST['cat_to_retrive'];
+						$taxonomySubmitted = $_POST['taxonomy'];
+
+						// Si il y a une catÃ©gorie
+						if($cat_to_retrieve_post > 0){
+								global $wpdb;
+
+								// On sÃ©lectionne les posts trie dans notre table pour la catÃ©gorie concernÃ©.
+								$table_name = $wpdb->prefix . $this->deefuse_ReOrder_tableName;
+								$sql = $wpdb->prepare("select * from $table_name where category_id = '%d' order by id", $cat_to_retrieve_post);
+								$order_result = $wpdb->get_results($sql);
+								$nbResult = count($order_result);
+
+								for($k =0 ;$k < $nbResult; ++$k) {
+										$order_result_incl[$order_result[$k]->post_id] = $order_result[$k]->incl;
+								}
+
+								// arguments pour la requete des post de la catÃ©gory $taxonomySubmitted classÃ© dans la taxonomy d'id $category;
+								$args = array(
+									'tax_query' => array(
+													array('taxonomy' => $taxonomySubmitted, 'operator' => 'IN', 'field' => 'id', 'terms' => $cat_to_retrieve_post)
+												),
+									'posts_per_page'			=> -1,
+									//'post_type'       => $post_type_detail->name,
+									'orderby'            => 'title',
+									'post_status'     => 'publish',
+									'order' => 'ASC'
+								);
+
+								if(has_filter('reorder_post_within_category_query_args')) {
+										$args = apply_filters('reorder_post_within_category_query_args', $args);
+								}
+								$this->stop_join = true;
+								$this->custom_cat = $cat_to_retrieve_post;
+								$query = new WP_Query( $args );
+								$this->stop_join = false;
+								$this->custom_cat = 0;
+								$posts_array = $query->posts;
+
+								// CrÃ©ation d'un tableau dont les clÃ© sont les ID des posts et les valeur les posts eux-mÃªme
+								$temp_order = array();
+								for($j = 0; $j < count($posts_array); ++$j) {
+									 $temp_order[$posts_array[$j]->ID] = $posts_array[$j];
+								}
+						}
+				}
+
+	    }
+	    ?>
+	    <div class="wrap">
+	    	<div class="icon32 icon32-posts-generic" id="icon-edit"><br></div>
+		<h2><?php echo sprintf(__('Tri des articles de type "%s"', 'deefusereorder'), null); ?></h2>
+		<p>
+		    <?php echo sprintf(__('Sélectionner une catégorie pour trier les articles de type <b>%s</b>. ','deefusereorder'), null);?>
+		</p>
+
+		<form method="post" id="chooseTaxomieForm">
+		<?php
+			wp_nonce_field('loadPostInCat','nounceLoadPostCat');
+			$listCategories = $settingsOptions['categories_checked'][$post_type_detail->name];
+			$listCategories = get_taxonomies();
+
+		    $taxonomies= '';
+		    $taxonomy= '';
+		    $term_selected = '';
+		    if(count($listCategories) > 0)
+		    {
+			echo '<select id="selectCatToRetrieve" name="cat_to_retrive">';
+			echo '<option value="null" disabled="disabled" selected="selected">Select</option>';
+			$catDisabled = false;
+			foreach($listCategories as $categorie){
+			    $taxonomies = get_taxonomies(array('name'=> $categorie), 'object');
+			    $taxonomy = $taxonomies[$categorie];
+
+			    // On liste maintenant les terms disponibles pour la taxonomie concernÃ©e
+			    $list_terms = get_terms( $taxonomy->name );
+			    if(count($list_terms) > 0){
+						echo '<optgroup id="'.$taxonomy->name.'" label="'.$taxonomy->labels->name.'">';
+				    foreach ($list_terms as $term){
+								$selected = '';
+								if( isset($cat_to_retrieve_post) && ($cat_to_retrieve_post == $term->term_id)){
+										$selected = ' selected = "selected"';
+										$term_selected = $term->name;
+								}
+								$disabled = '';
+								if($term->count < 2){
+										$disabled = ' disabled = "disabled"';
+										$catDisabled = true;
+								}
+								echo '<option' . $selected . $disabled.' value="'.$term->term_id.'">' . $term->name . '</option>';
+				    }
+						echo '</optgroup>';
+			    }
+			}
+			echo '</select>';
+			if($catDisabled)
+			    echo '<br/><span class="description">' . __("Les catégories grisées ne sont pas accessibles au tri car elle ne contiennent pas assez d'articles pour le moment. ","deefusereorder") .'</span>';
+
+			$valueTaxonomyField = ( isset($taxonomySubmitted) ? $taxonomySubmitted : '' );
+			echo '<input type="hidden" id="taxonomyHiddenField" name="taxonomy" value="'.$valueTaxonomyField.'"/>';
+		    }
+
+		?>
+		</form>
+		<form id="form_result" method="post">
+		<?php
+		    if(isset($posts_array))
+		    {
+			echo '<div id="result">';
+			echo '<div id="sorter_box">';
+			    echo '<h3>' . __('Utiliser le tri manuel pour cette catégorie ?', 'deefusereorder') .'</h3>';
+			    echo '<div id="catOrderedRadioBox">';
+
+				// on regarde si un des radio est cochÃ©
+				$checkedRadio1 = '';
+				$checkedRadio2 = ' checked = "checked"';
+				$orderedSettingOptions = $this->getOrderedCategoriesOptions();
+				if(isset($orderedSettingOptions[$cat_to_retrieve_post]) && $orderedSettingOptions[$cat_to_retrieve_post] == 'true')
+				{
+				    $checkedRadio1 = $checkedRadio2;
+				    $checkedRadio2 = '';
+				}
+
+				echo '<label for="yes"><input type="radio"'.$checkedRadio1.' class="option_order" id="yes" value="true" name="useForThisCat"/> <span>'.__('Oui', 'deefusereorder').'</span></label><br/>';
+				echo '<label for="no"><input type="radio"'.$checkedRadio2.' class="option_order" id="no" value="false" name="useForThisCat"/> <span>'.__('Non', 'deefusereorder').'</span></label>';
+				echo '<input type="hidden" name="termID" id="termIDCat" value="'.$cat_to_retrieve_post.'">';
+				echo '<span class="spinner" id="spinnerAjaxRadio"></span>';
+			    echo '</div>';
+
+			    echo '<h3 class="floatLeft">' . sprintf(__('Listes des articles de type "%s", classé dans la catégorie "%s" :', 'deefusereorder'), null, $term_selected) . '</h3>';
+			    echo '<span id="spinnerAjaxUserOrdering" class="spinner"></span><div class="clearBoth"></div>';
+			echo '<ul id="sortable-list" class="order-list" rel ="'.$cat_to_retrieve_post.'">';
+
+			// On liste les posts du tableau $posts_array pour le trie
+			for($i = 0; $i < count( $order_result); ++$i) {
+			    $post_id = $order_result[$i]->post_id;
+			    $post = $temp_order[$post_id];
+			    unset($temp_order[$post_id]);
+			    $od = $order_result_incl[$post->ID];
+
+			    echo '<li id="'.$post->ID.'">';
+			    echo '<span class="title">'.$post->post_title.'</span>';
+			    echo '</li>';
+			}
+
+			// On liste maintenant les posts qu'il reste et qui ne sont pas encore dans notre table
+			foreach($temp_order as $temp_order_id => $temp_order_post) {
+			    $post_id = $temp_order_id;
+			    $post = $temp_order_post;
+
+			    echo '<li id="'.$post->ID.'">';
+			    echo '<span class="title">'.$post->post_title.'</span>';
+			    echo '</li>';
+
+			}
+
+			echo "</ul>";
+			echo '</div>';
+			echo '</div>';
+		    }
+		?>
+		</form>
+		<div id="debug">
+
+		</div>
+	    </div>
+	    <?php
+	}
 
 	public function printOrderPage(){
 		  // On rÃ©cupÃ¨re le VPT sur lequel on travaille
